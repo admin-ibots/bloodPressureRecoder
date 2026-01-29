@@ -1,0 +1,55 @@
+#include <M5Unified.h>
+
+void setup() {
+    auto cfg = M5.config();
+    M5.begin(cfg);
+
+    // 1. Serial setup
+    Serial.begin(115200);
+    delay(2000); 
+    Serial.println("--- System Start ---");
+
+    // 2. Display initialization
+    M5.Display.setBrightness(100);
+    M5.Display.fillScreen(GREEN);
+
+    // 3. Center Text Logic
+    M5.Display.setTextColor(BLACK); 
+    M5.Display.setTextSize(5); // Increase size for visibility
+
+    // Set text alignment to center-middle
+    M5.Display.setTextDatum(middle_center);
+
+    // Get screen dimensions and draw the string at the center
+    int x = M5.Display.width() / 2;
+    int y = M5.Display.height() / 8 + 8;
+    M5.Display.drawString("123", x, y);
+    y = y + 40;
+    M5.Display.drawString("456", x, y);
+    y = y + 40;
+    M5.Display.drawString("789", x, y);    
+}
+
+bool screenIsOn = true; // Variable to track the state locally
+
+void loop() {
+    M5.update();
+
+    // Check if the main screen button was pressed
+    if (M5.BtnA.wasPressed()) {
+        if (!screenIsOn) {
+            // WAKE UP
+            M5.Display.wakeup();
+            M5.Display.setBrightness(100); 
+            screenIsOn = true;
+            Serial.println("Display: Awake");
+        } else {
+            // GO TO SLEEP
+            M5.Display.sleep();
+            // Note: Some versions also need brightness 0 to kill the LED driver
+            M5.Display.setBrightness(0); 
+            screenIsOn = false;
+            Serial.println("Display: Sleeping");
+        }
+    }
+}

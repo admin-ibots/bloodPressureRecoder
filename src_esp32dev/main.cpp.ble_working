@@ -1,0 +1,181 @@
+#include <Arduino.h>
+#include <NimBLEDevice.h>
+
+// BLE HID 標準 UUID
+static const NimBLEUUID hidServiceUUID((uint16_t)0x1812);
+static const NimBLEUUID reportUUID((uint16_t)0x2A4D);
+static const NimBLEUUID reportMapUUID((uint16_t)0x2A4B);
+static const NimBLEUUID protocolModeUUID((uint16_t)0x2A4E);
+
+static NimBLEAdvertisedDevice* myDevice = nullptr;
+static NimBLEClient* pClient = nullptr;
+static bool doConnect = false;
+
+// 數據回傳 Callback
+// void notifyCallback(NimBLERemoteCharacteristic* pChar, uint8_t* pData, size_t length, bool isNotify) {
+//     Serial.printf(">>> [KEY EVENT] From %s | Length: %d | Data: ", 
+//                   pChar->getUUID().toString().c_str(), length);
+//     for (int i = 0; i < length; i++) {
+//         Serial.printf("%02X ", pData[i]);
+//     }
+//     Serial.println();
+// }
+
+void notifyCallback(NimBLERemoteCharacteristic* pChar, uint8_t* pData, size_t length, bool isNotify) {
+    // HID 鍵盤 Report 中，index 2 是第一個按下的鍵位碼
+    if (length >= 3) {
+        uint8_t keyCode = pData[2];
+
+        // 1. 忽略放開按鍵 (00) 和 掃描碼 53 (NumLock 觸發)
+        if (keyCode == 0x00 || keyCode == 0x53) {
+            return;
+        }
+
+        char mappedChar = 0;
+
+        // 2. 針對 Numpad 數字鍵進行映射
+        // 
+        if (keyCode >= 0x59 && keyCode <= 0x62) {
+            // 0x59 是 '1', 0x5A 是 '2' ... 0x61 是 '9'
+            if (keyCode == 0x62) {
+                mappedChar = '0';
+            } else {
+                mappedChar = (char)('1' + (keyCode - 0x59));
+            }
+        } 
+        // 處理其他常見 Numpad 符號 (可選)
+        else if (keyCode == 0x54) mappedChar = '/';
+        else if (keyCode == 0x55) mappedChar = '*';
+        else if (keyCode == 0x56) mappedChar = '-';
+        else if (keyCode == 0x57) mappedChar = '+';
+        else if (keyCode == 0x58) mappedChar = 'E'; // Enter
+
+        // 3. 輸出結果
+        if (mappedChar) {
+            Serial.printf(">>> Input Number: %c (Raw: 0x%02X)\n", mappedChar, keyCode);
+        } else {
+            Serial.printf(">>> Other Key Pressed: 0x%02X\n", keyCode);
+        }
+    }
+}
+
+bool connectToServer() {
+    if (pClient != nullptr) NimBLEDevice::deleteClient(pClient);
+    pClient = NimBLEDevice::createClient();
+
+    Serial.println(">>> 1. Connecting to physical layer...");
+    if (!pClient->connect(myDevice)) return false;
+
+    // 2. 強制加密 (Just Works)
+    Serial.println(">>> 2. Requesting Security...");
+    pClient->secureConnection();
+    
+    // 等待 LED 常亮 (代表加密完成)
+    for(int i=0; i<3; i++) { delay(1000); Serial.print("."); }
+    Serial.println(" Encrypted.");
+
+    // 3. 獲取 HID 服務
+    NimBLERemoteService* pRemoteService = pClient->getService(hidServiceUUID);
+    bool subSuccess = false;
+
+    if (pRemoteService != nullptr) {
+        Serial.println(">>> 3. HID Service Found. Initializing...");
+        
+        // 嘗試讀取 Report Map (0x2A4B) 刺激設備
+        NimBLERemoteCharacteristic* pReportMap = pRemoteService->getCharacteristic(reportMapUUID);
+        if (pReportMap) {
+            Serial.println("   - Reading Report Map...");
+            pReportMap->readValue();
+        }
+
+        // 搜尋並訂閱所有 Report Characteristics (2A4D)
+        auto charas = pRemoteService->getCharacteristics(true); 
+        for (auto &chara : *charas) {
+            if (chara->getUUID() == reportUUID) {
+                Serial.printf("   - Found Report: %s\n", chara->getUUID().toString().c_str());
+
+                if (chara->canNotify()) {
+                    // [關鍵點 A] 強制寫入 CCCD (0x2902) 打開通知開關
+                    NimBLERemoteDescriptor* pDesc = chara->getDescriptor(NimBLEUUID((uint16_t)0x2902));
+                    if (pDesc) {
+                        uint8_t val[] = {0x01, 0x00};
+                        pDesc->writeValue(val, 2, true);
+                        Serial.println("     ==> CCCD Notification Enabled Manually.");
+                    }
+
+                    // [關鍵點 B] 訂閱通知
+                    if (chara->subscribe(true, notifyCallback)) {
+                        Serial.println("     ==> Subscribed successfully.");
+                        subSuccess = true;
+                    }
+                }
+            }
+        }
+    } else {
+        Serial.println("!!! HID Service (1812) not found.");
+    }
+
+    // 4. [關鍵點 C] 檢查自定義服務 (6e40...)
+    // 有些鍵盤雖然有 HID 服務，但其實是透過自定義串口 (NUS) 傳資料
+    NimBLERemoteService* pCustomService = pClient->getService("6e40ff01-b5a3-f393-e0a9-e50e24dcca9e");
+    if (pCustomService) {
+        Serial.println(">>> 4. Found Custom Service (NUS). Trying to subscribe...");
+        auto cCharas = pCustomService->getCharacteristics(true);
+        for (auto &c : *cCharas) {
+            if (c->canNotify()) {
+                if (c->subscribe(true, notifyCallback)) {
+                    Serial.printf("   - Subscribed to Custom Chara: %s\n", c->getUUID().toString().c_str());
+                    subSuccess = true;
+                }
+            }
+        }
+    }
+
+    // 5. 優化連線參數 (喚醒省電模式)
+    if (subSuccess) {
+        Serial.println(">>> 5. Updating Connection Parameters...");
+        pClient->updateConnParams(12, 12, 0, 60); 
+    }
+
+    return subSuccess;
+}
+
+class MyCallbacks: public NimBLEAdvertisedDeviceCallbacks {
+    void onResult(NimBLEAdvertisedDevice* advertisedDevice) {
+        if (advertisedDevice->getName() == "YaRan KeyPad") {
+            Serial.println(">>> Target Found! Stopping scan...");
+            NimBLEDevice::getScan()->stop();
+            myDevice = advertisedDevice;
+            doConnect = true;
+        }
+    }
+};
+
+void setup() {
+    Serial.begin(115200);
+    Serial.println("Starting ESP32 BLE HID Host...");
+    NimBLEDevice::init("ESP32-Host");
+
+    // 安全設定：Just Works 模式
+    NimBLEDevice::deleteAllBonds(); // 每次重啟清除舊配對，確保重新握手
+    NimBLEDevice::setSecurityAuth(true, false, false); 
+    NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
+
+    NimBLEScan* pScan = NimBLEDevice::getScan();
+    pScan->setAdvertisedDeviceCallbacks(new MyCallbacks(), false);
+    pScan->setActiveScan(true);
+    pScan->start(0);
+}
+
+void loop() {
+    if (doConnect) {
+        doConnect = false;
+        if (connectToServer()) {
+            Serial.println(">>> SUCCESS: System Ready. Press keys now!");
+        } else {
+            Serial.println(">>> FAILED: Setup incomplete. Retrying...");
+            NimBLEDevice::getScan()->start(0);
+        }
+    }
+    delay(10);
+}

@@ -1,0 +1,54 @@
+#include <Arduino.h>
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <WiFiClientSecure.h>
+
+const char* ssid = "TP-LINK_D413";
+const char* password = "12345678";
+const String url = "https://n8n4090.yo3dp.cc/webhook/620e6635-20ae-44e7-b21e-a77e9cedb343";
+
+void setup() {
+    Serial.begin(115200);
+    WiFi.setSleep(false);
+    WiFi.begin(ssid, password);
+    while (WiFi.status() != WL_CONNECTED) { delay(500); Serial.print("."); }
+    Serial.println("\n--- WiFi Connected ---");
+}
+
+void call_n8n() {
+    // 監控記憶體，HTTPS 握手前至少需要 > 50000 比較保險
+    Serial.printf("\n[Memory] Free Heap: %d\n", ESP.getFreeHeap());
+
+    WiFiClientSecure client; // 改用 Stack 分配，函數結束後會自動釋放
+    client.setInsecure();    // 跳過憑證驗證
+
+    HTTPClient https;
+    Serial.println("[HTTPS] 正在建立加密連線...");
+
+    // 增加超時到 20 秒，因為 SSL 握手在網路不穩時會很慢
+    if (https.begin(client, url)) {
+        https.setTimeout(20000); 
+        https.addHeader("Connection", "close");
+
+        int httpCode = https.GET();
+
+        if (httpCode > 0) {
+            Serial.printf("[HTTPS] 成功! 代碼: %d\n", httpCode);
+            Serial.println("回應內容: " + https.getString());
+        } else {
+            // 如果這裏報 -1，代表 SSL 握手失敗
+            Serial.printf("[HTTPS] 失敗! 錯誤碼: %d (%s)\n", 
+                          httpCode, https.errorToString(httpCode).c_str());
+        }
+        https.end();
+    }
+    
+    // client 會在函數結束時自動清理
+}
+
+void loop() {
+    if (WiFi.status() == WL_CONNECTED) {
+        call_n8n();
+    }
+    delay(20000);
+}
