@@ -3,9 +3,15 @@
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 
-const char* ssid = "TP-LINK_D413";
-const char* password = "12345678";
+// const char* ssid = "TP-LINK_D413";
+// const char* password = "12345678";
+const char* ssid = "MAC";
+const char* password = "Kpc24642464";
 const String url = "https://n8n4090.yo3dp.cc/webhook/620e6635-20ae-44e7-b21e-a77e9cedb343";
+//const String url = "https://script.google.com/macros/s/AKfycbyf1raOOGjfNvkIpjtcY80TO8TQhdQbeR3icIi2D4e8XLsYYXTQpSBFXJTYYWiiDWmiSg/exec?UR=A&BU=123&BD=78&HR=60";
+
+unsigned long startMs;
+unsigned long duration;
 
 void setup() {
     Serial.begin(115200);
@@ -25,10 +31,14 @@ void call_n8n() {
     HTTPClient https;
     Serial.println("[HTTPS] 正在建立加密連線...");
 
+    
+
     // 增加超時到 20 秒，因為 SSL 握手在網路不穩時會很慢
     if (https.begin(client, url)) {
         https.setTimeout(20000); 
         https.addHeader("Connection", "close");
+
+        https.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS); // 加入這行！
 
         int httpCode = https.GET();
 
@@ -48,7 +58,10 @@ void call_n8n() {
 
 void loop() {
     if (WiFi.status() == WL_CONNECTED) {
+        startMs = millis(); // 記錄開始毫秒數
         call_n8n();
+        duration = millis() - startMs; // 計算耗時
+        Serial.printf("n8n 耗時: %lu 毫秒\n", duration);
     }
     delay(20000);
 }

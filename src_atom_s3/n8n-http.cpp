@@ -1,11 +1,16 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 
-const char* ssid = "TP-LINK_D413";
-const char* password = "12345678";
+// const char* ssid = "TP-LINK_D413";
+// const char* password = "12345678";
+const char* ssid = "MAC";
+const char* password = "Kpc24642464";
 // 建議改用正式網址（去掉 -test），並在 n8n 點擊 Active
 //String url = "http://192.168.0.102:5678/webhook/620e6635-20ae-44e7-b21e-a77e9cedb343"; // Upload/Reset 後，剛開始會有失敗，但幾次後(10次內)，開始成功後就 OK
 String url = "http://n8n4090.yo3dp.cc/webhook/620e6635-20ae-44e7-b21e-a77e9cedb343"; // Upload/Reset 後，剛開始會有失敗，但幾次後(10次內)，開始成功後就 OK
+
+unsigned long startMs;
+unsigned long duration;
 
 WiFiClient client;
 HTTPClient http;
@@ -61,6 +66,10 @@ void call_n8n() {
 }
 
 void loop() {
+    startMs = millis(); // 記錄開始毫秒數
     call_n8n();
+    duration = millis() - startMs; // 計算耗時
+    Serial.printf("n8n 耗時: %lu 毫秒\n", duration);
     delay(2000); // 增加間隔，避免被伺服器判定為攻擊
 }
+
