@@ -1,0 +1,365 @@
+{
+  "name": "血壓記錄",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "620e6635-20ae-44e7-b21e-a77e9cedb343",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -528,
+        -176
+      ],
+      "id": "5f62087c-78c5-490f-b298-5ac276a1182e",
+      "name": "Webhook",
+      "webhookId": "620e6635-20ae-44e7-b21e-a77e9cedb343"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1G3TsODhUZrGhg6nBos5cnr_O5-uE_Q3QQY0UzguRYVQ",
+          "mode": "list",
+          "cachedResultName": "血壓紀錄",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1G3TsODhUZrGhg6nBos5cnr_O5-uE_Q3QQY0UzguRYVQ/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Paul",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1G3TsODhUZrGhg6nBos5cnr_O5-uE_Q3QQY0UzguRYVQ/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Date": "={{ $json.Date }}",
+            "收縮壓": "={{ $json.SYS }}",
+            "舒張壓": "={{ $json.DIA }}",
+            "心率": "={{ $json.HeartRate }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Date",
+              "displayName": "Date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "收縮壓",
+              "displayName": "收縮壓",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "舒張壓",
+              "displayName": "舒張壓",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "心率",
+              "displayName": "心率",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        64,
+        -256
+      ],
+      "id": "c9ddebd2-a14e-4841-a42b-3d4a3e8334c2",
+      "name": "Append data to Paul",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "cEJUYJ1nu2qIwN7Q",
+          "name": "dummy0.kang Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1G3TsODhUZrGhg6nBos5cnr_O5-uE_Q3QQY0UzguRYVQ",
+          "mode": "list",
+          "cachedResultName": "血壓紀錄",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1G3TsODhUZrGhg6nBos5cnr_O5-uE_Q3QQY0UzguRYVQ/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 1822031662,
+          "mode": "list",
+          "cachedResultName": "Elisa",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1G3TsODhUZrGhg6nBos5cnr_O5-uE_Q3QQY0UzguRYVQ/edit#gid=1822031662"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Date": "={{ $json.Date }}",
+            "收縮壓": "={{ $json.SYS }}",
+            "舒張壓": "={{ $json.DIA }}",
+            "心率": "={{ $json.HeartRate }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Date",
+              "displayName": "Date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "收縮壓",
+              "displayName": "收縮壓",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "舒張壓",
+              "displayName": "舒張壓",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "心率",
+              "displayName": "心率",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        64,
+        -64
+      ],
+      "id": "f2cba4ac-8550-43d2-a377-9835ef635809",
+      "name": "Append data to Elias",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "cEJUYJ1nu2qIwN7Q",
+          "name": "dummy0.kang Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={\n  \"Date\": {{ $now }},\n  \"User\": {{ $json.query.UR }},\n  \"SYS\": {{ $json.query.BU }},\n  \"DIA\": {{ $json.query.BD }},\n  \"HeartRate\": {{ $json.query.HR }}\n}\n",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -352,
+        -176
+      ],
+      "id": "e2dc1ce2-477f-436c-bb3b-3d27a4b71624",
+      "name": "Edit Fields"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "cd21654c-8765-4095-8cfd-f40468a5db56",
+              "leftValue": "={{ $json.User }}",
+              "rightValue": "A",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -176,
+        -176
+      ],
+      "id": "282decd0-c205-4545-ae00-2e3a585750dc",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "sendTo": "paul@paul-kang.com",
+        "subject": "={{ $json.name }} 新血壓紀錄 - SYS:{{ $('If').item.json.SYS }}, DIA:{{ $('If').item.json.DIA }}, HR:{{ $('If').item.json.HeartRate }}",
+        "message": "={{ $json.name }} 新血壓紀錄 - SYS:{{ $('If').item.json.SYS }}, DIA:{{ $('If').item.json.DIA }}, HR:{{ $('If').item.json.HeartRate }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        496,
+        -176
+      ],
+      "id": "3c4025cb-ae0d-4a38-a402-3acc44dd6592",
+      "name": "Send an email to paul@paul-kang.com",
+      "webhookId": "1d11c3ab-b3db-4fcd-b40c-bc0535e06be8",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "bOorzjX0TS0cQSIx",
+          "name": "Kang.PaulChain Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// for (const item of $input.all()) {\n\n// if ($('If').first().json.User == \"A\") {\n//   $input.all(). = \"Paul\";\n// } else item.json.name = \"Elias\";\n\nvar output = {}\nif ( $('Edit Fields').first().json.User== \"A\") {\n  output.name= \"Paul\";\n} else output.name = \"Elias\";\n\nreturn output;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        304,
+        -176
+      ],
+      "id": "45c4bcce-84ca-498c-a761-d038d616af1f",
+      "name": "Code in JavaScript"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append data to Elias": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Append data to Paul",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Append data to Elias",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append data to Paul": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send an email to paul@paul-kang.com": {
+      "main": [
+        []
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Send an email to paul@paul-kang.com",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": false
+  },
+  "versionId": "ac79ca3d-1306-4e7e-ac91-8e987bb39a8e",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "5984226d5bed41697951bb3b97b8bedf1f5a3b05efb638479808e117f66b8748"
+  },
+  "id": "2l4V5pbq5vaRnIOKLAQ-J",
+  "tags": []
+}
