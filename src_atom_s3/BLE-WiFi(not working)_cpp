@@ -1,0 +1,496 @@
+#include <Arduino.h>
+#include <NimBLEDevice.h>
+#include <M5Unified.h>
+#include <HTTPClient.h>
+#include "../secretes/bpr_webhooks.h"
+
+// define WIFI: HOME or OFFICE
+#define  WIFI HOME
+#include "../secretes/wifi_credentials.h"
+
+// only works in office: String url = N8N_BPR_LOCALHOST_HTTP_WEBHOOK; 
+String url = N8N_BPR_CLOUD_FLARE_HTTP_WEBHOOK;
+
+unsigned long startMs;
+unsigned long duration;
+
+WiFiClient client;
+HTTPClient http;
+
+// BLE HID 標準 UUID
+static const NimBLEUUID hidServiceUUID((uint16_t)0x1812);
+static const NimBLEUUID reportUUID((uint16_t)0x2A4D);
+static const NimBLEUUID reportMapUUID((uint16_t)0x2A4B);
+static const NimBLEUUID protocolModeUUID((uint16_t)0x2A4E);
+int remoteBatLevel = -1; // Stores the keyboard's battery level
+static const NimBLEUUID batteryServiceUUID((uint16_t)0x180F);
+static const NimBLEUUID batteryLevelCharUUID((uint16_t)0x2A19);
+
+static NimBLEAdvertisedDevice* myDevice = nullptr;
+static NimBLEClient* pClient = nullptr;
+static bool doConnect = false;
+
+String inputBuffer = "";
+unsigned long lastKeyEventTime = 0;
+const unsigned long SLEEP_TIMEOUT = 10000; // 10 seconds
+bool screenIsOn = true;
+
+String valUR = "";  // Stores "A" or "B"
+String valBU = "";  // Stores BU digits
+String valBD = "";  // Stores BD digits
+String valHR = "";  // Stores HR digits
+
+int inputStep = 0;  // 0: idle, 1: BU, 2: BD, 3: HR
+String tempDigits = ""; // Temporary buffer for the current number being typed
+
+void drawBattery() {
+    M5.Display.setTextSize(2);
+    M5.Display.setTextColor(BLACK);
+    M5.Display.setTextDatum(top_right);
+    
+    // Clear the corner
+    //M5.Display.fillRect(70, 0, 58, 20, GREEN); 
+    
+    String batText;
+    if (remoteBatLevel == -1) {
+        batText = "KB: ???"; // Not yet read
+    } else {
+        batText = "KB:" + String(remoteBatLevel) + "%";
+    }
+    
+    M5.Display.drawString(batText, 125, 5);
+}
+
+void drawSidebar() {
+    M5.Display.setTextSize(3);
+    M5.Display.setTextColor(BLACK);
+    M5.Display.setTextDatum(top_left); // Switch to left for the sidebar
+
+    int startX = 10; // Align under the "K" of KB:100%
+    
+    // Clear the sidebar area
+    //M5.Display.fillRect(startX, 20, 43, 100, GREEN);
+
+    if (valUR != "")  M5.Display.drawString("UR:" + valUR, 40, 24);
+    if (valBU != "")  M5.Display.drawString("BU:" + valBU, startX, 52);
+    if (valBD != "")  M5.Display.drawString("BD:" + valBD, startX, 80);
+    if (valHR != "")  M5.Display.drawString("HR:" + valHR, startX, 108);
+}
+
+// Helper to draw a heart shape
+void drawRedHeart() {
+    M5.Display.fillScreen(GREEN);
+    int x = M5.Display.width() / 2;
+    int y = M5.Display.height() / 2;
+    // Simple heart using two circles and a triangle
+    M5.Display.fillCircle(x - 15, y - 10, 15, RED);
+    M5.Display.fillCircle(x + 15, y - 10, 15, RED);
+    // M5.Display.fillTriangle(x - 31, y - 2, x + 31, y - 2, x, y + 30, RED);
+    M5.Display.fillTriangle(x - 27, y - 0, x + 27, y - 0, x, y + 30, RED);
+    M5.Display.fillRect(x-10, y-10, 20, 10, RED); 
+
+    drawBattery();
+    drawSidebar();
+}
+
+// Helper to refresh screen with current buffer
+void refreshDisplay(String text) {
+    M5.Display.fillScreen(GREEN);
+    M5.Display.setTextColor(BLACK);
+    M5.Display.setTextDatum(middle_center);
+    M5.Display.setTextSize(3);
+    M5.Display.drawString(text, M5.Display.width() / 2, M5.Display.height() / 2);
+
+    drawBattery();
+    drawSidebar();
+}
+
+void call_n8n() {
+    Serial.println("--- Call n8n ---");
+    
+    // 每次呼叫前確保狀態乾淨
+    http.begin(client, url);
+    http.setTimeout(10000); 
+    http.addHeader("Connection", "close"); // 既然會重置，不要用 Keep-alive
+
+    int httpCode = http.GET();
+
+    if (httpCode > 0) {
+        Serial.printf("成功! Code: %d\n", httpCode);
+        String payload = http.getString();
+        if (httpCode == 404) {
+            Serial.println("警告: n8n 找不到 Webhook，請確認 Workflow 已 Active 並使用正式 URL。");
+        }
+        Serial.println(payload);
+    } else {
+        Serial.printf("失敗! 錯誤: %s\n", http.errorToString(httpCode).c_str());
+        // 如果連線被拒絕，強制停止 client 釋放 socket
+        client.stop();
+    }
+    http.end();
+}
+
+void notifyCallback(NimBLERemoteCharacteristic* pChar, uint8_t* pData, size_t length, bool isNotify) {
+    lastKeyEventTime = millis();
+    if (!screenIsOn) { M5.Display.wakeup(); M5.Display.setBrightness(100); screenIsOn = true; }
+
+    if (length >= 3) {
+        uint8_t keyCode = pData[2];
+        if (keyCode == 0x00 || keyCode == 0x53) return;
+
+        char c = 0;
+        // Map keys
+        if (keyCode >= 0x59 && keyCode <= 0x61) c = (char)('1' + (keyCode - 0x59));
+        else if (keyCode == 0x62) c = '0';
+        else if (keyCode == 0x54) c = '/';
+        else if (keyCode == 0x55) c = '*';
+        else if (keyCode == 0x56) c = '-';
+        else if (keyCode == 0x57) c = '+';
+        else if (keyCode == 0x63) c = '.'; // Numpad Dot
+        else if (keyCode == 0x58) { // Enter - Reset all
+            // 1. Construct the data string
+            String finalData = "U:" + valUR + ",BU:" + valBU + ",BD:" + valBD + ",HR:" + valHR;
+            
+            // 2. Serial Print the result
+            Serial.println("\n--- Data Submitted ---");
+            Serial.println(finalData);
+            Serial.println("----------------------");
+
+            // Check finalData validation
+            // upload finalData
+
+            // 3. Visual feedback
+            M5.Display.fillScreen(GREEN);
+            M5.Display.setTextSize(3);
+            M5.Display.setTextDatum(middle_center);
+            M5.Display.drawString("SENT", M5.Display.width() / 2, M5.Display.height() / 2);
+            
+            delay(500); // Brief pause to show "SENT"
+
+            // 4. Reset variables and return to Heart screen
+            valUR = ""; valBU = ""; valBD = ""; valHR = ""; 
+            inputStep = 0; tempDigits = "";
+            drawRedHeart(); 
+            return;
+        }
+
+        if (c == '-') { valUR = "A"; inputStep = 1; tempDigits = ""; }
+        else if (c == '+') { valUR = "B"; inputStep = 1; tempDigits = ""; }
+        else if ((c >= '0' && c <= '9') || c == '.') {
+            tempDigits += c;
+            
+            // Logic: Move to next field if 3 digits reached OR dot pressed
+            if (tempDigits.length() == 3 || c == '.') {
+                if (c == '.') tempDigits.remove(tempDigits.length()-1); // Remove dot from string
+                
+                if (inputStep == 1) { valBU = tempDigits; inputStep = 2; }
+                else if (inputStep == 2) { valBD = tempDigits; inputStep = 3; }
+                else if (inputStep == 3) { valHR = tempDigits; inputStep = 0; }
+                tempDigits = ""; // Reset for next field
+            }
+        }
+        
+        // Refresh display
+        M5.Display.fillScreen(GREEN);
+        drawBattery();
+        drawSidebar();
+        // Show current typing progress in center
+        M5.Display.setTextDatum(middle_center);
+        M5.Display.setTextSize(3);
+        // M5.Display.drawString(tempDigits == "" ? valUR : tempDigits, 10, 64);
+        M5.Display.drawString(tempDigits, 16, 16);
+    }
+}
+
+
+bool connectToServer() {
+    if (pClient != nullptr) NimBLEDevice::deleteClient(pClient);
+    pClient = NimBLEDevice::createClient();
+
+    Serial.println(">>> 1. Connecting to physical layer...");
+    if (!pClient->connect(myDevice)) return false;
+
+    // 2. 強制加密 (Just Works)
+    Serial.println(">>> 2. Requesting Security...");
+    pClient->secureConnection();
+    
+    // 等待 LED 常亮 (代表加密完成)
+    for(int i=0; i<3; i++) { delay(1000); Serial.print("."); }
+    Serial.println(" Encrypted.");
+
+    // 2.5 --- Get Keyboard Battery Level (Service 0x180F) ---
+    NimBLERemoteService* pBatService = pClient->getService(batteryServiceUUID);
+    if (pBatService) {
+        NimBLERemoteCharacteristic* pBatChar = pBatService->getCharacteristic(batteryLevelCharUUID);
+        if (pBatChar) {
+            remoteBatLevel = pBatChar->readValue<uint8_t>();
+            Serial.printf(">>> 2.5 Keyboard Battery Found: %d%%\n", remoteBatLevel);
+            
+        //     會造成 HID 找不到
+        //     // Subscribe to battery changes
+        //     if (pBatChar->canNotify()) {
+        //         pBatChar->subscribe(true, [](NimBLERemoteCharacteristic* pChar, uint8_t* pData, size_t len, bool isNotify) {
+        //             if (len > 0) {
+        //                 remoteBatLevel = pData[0];
+        //                 // If screen is on, update the display immediately
+        //                 if (screenIsOn) drawBattery(); 
+        //             }
+        //         });
+        //     }
+        }
+    }
+
+    // 3. 獲取 HID 服務
+    NimBLERemoteService* pRemoteService = pClient->getService(hidServiceUUID);
+    bool subSuccess = false;
+
+    if (pRemoteService != nullptr) {
+        Serial.println(">>> 3. HID Service Found. Initializing...");
+
+        // 嘗試讀取 Report Map (0x2A4B) 刺激設備
+        NimBLERemoteCharacteristic* pReportMap = pRemoteService->getCharacteristic(reportMapUUID);
+        if (pReportMap) {
+            Serial.println("   - Reading Report Map...");
+            pReportMap->readValue();
+        }
+
+        // 搜尋並訂閱所有 Report Characteristics (2A4D)
+        auto charas = pRemoteService->getCharacteristics(true); 
+        for (auto &chara : *charas) {
+            if (chara->getUUID() == reportUUID) {
+                Serial.printf("   - Found Report: %s\n", chara->getUUID().toString().c_str());
+
+                if (chara->canNotify()) {
+                    // [關鍵點 A] 強制寫入 CCCD (0x2902) 打開通知開關
+                    NimBLERemoteDescriptor* pDesc = chara->getDescriptor(NimBLEUUID((uint16_t)0x2902));
+                    if (pDesc) {
+                        uint8_t val[] = {0x01, 0x00};
+                        pDesc->writeValue(val, 2, true);
+                        Serial.println("     ==> CCCD Notification Enabled Manually.");
+                    }
+
+                    // [關鍵點 B] 訂閱通知
+                    if (chara->subscribe(true, notifyCallback)) {
+                        Serial.println("     ==> Subscribed successfully.");
+                        subSuccess = true;
+                    }
+                }
+            }
+        }
+    } else {
+        Serial.println("!!! HID Service (1812) not found.");
+    }
+
+    // 4. [關鍵點 C] 檢查自定義服務 (6e40...)
+    // 有些鍵盤雖然有 HID 服務，但其實是透過自定義串口 (NUS) 傳資料
+    NimBLERemoteService* pCustomService = pClient->getService("6e40ff01-b5a3-f393-e0a9-e50e24dcca9e");
+    if (pCustomService) {
+        Serial.println(">>> 4. Found Custom Service (NUS). Trying to subscribe...");
+        auto cCharas = pCustomService->getCharacteristics(true);
+        for (auto &c : *cCharas) {
+            if (c->canNotify()) {
+                if (c->subscribe(true, notifyCallback)) {
+                    Serial.printf("   - Subscribed to Custom Chara: %s\n", c->getUUID().toString().c_str());
+                    subSuccess = true;
+                }
+            }
+        }
+    }
+
+    // 5. 優化連線參數 (喚醒省電模式)
+    if (subSuccess) {
+        Serial.println(">>> 5. Updating Connection Parameters...");
+        pClient->updateConnParams(12, 12, 0, 60); 
+    }
+
+    if (pClient->isConnected()) {
+        M5.Display.fillScreen(GREEN);
+        drawRedHeart();
+    }
+
+    if (subSuccess) {
+        pClient->updateConnParams(12, 12, 0, 60); 
+        Serial.println(">>> 5. Connection Parameters Optimized.");
+        
+        // Final UI Update
+        // drawRedHeart(); 
+    }
+
+    lastKeyEventTime = millis();
+
+    return subSuccess;
+}
+
+class MyCallbacks: public NimBLEAdvertisedDeviceCallbacks {
+    void onResult(NimBLEAdvertisedDevice* advertisedDevice) {
+        if (advertisedDevice->getName() == "YaRan KeyPad") {
+            Serial.println(">>> Target Found! Stopping scan...");
+            NimBLEDevice::getScan()->stop();
+
+            // 安全做法：如果之前有舊的對象，先刪除避免記憶體洩漏
+            if (myDevice != nullptr) {
+                delete myDevice;
+            }
+            // 複製對象，確保 connect 時它還存在
+            myDevice = new NimBLEAdvertisedDevice(*advertisedDevice);
+
+            doConnect = true;
+        }
+    }
+};
+
+// void setup() {
+//     auto cfg = M5.config();
+//     M5.begin(cfg);
+
+//     Serial.begin(115200);
+//     delay(100);
+
+//     // 1. 強制清理 WiFi 緩存
+//     WiFi.disconnect(true);
+//     delay(1000);
+    
+//     WiFi.begin(ssid, password);
+//     WiFi.setSleep(false); 
+
+//     while (WiFi.status() != WL_CONNECTED) {
+//         delay(500);
+//         Serial.print(".");
+//     }
+//     Serial.println("\nConnected!");
+
+//     // 2. 顯示診斷資訊
+//     Serial.printf("IP: %s, GW: %s\n", WiFi.localIP().toString().c_str(), WiFi.gatewayIP().toString().c_str());
+
+//     //call_n8n();
+
+
+//     delay(2000); 
+
+//     Serial.println("Starting ESP32 BLE HID Host...");
+
+//     // Screen background -> Green
+//     M5.Display.setBrightness(100);
+//     M5.Display.fillScreen(GREEN);
+
+//     // text: color->black, size->5, alignment to center-middle
+//     M5.Display.setTextColor(BLACK); 
+//     M5.Display.setTextSize(5);
+//     M5.Display.setTextDatum(middle_center);
+//     int x = M5.Display.width() / 2;
+//     int y = M5.Display.height() / 2;
+
+//     // Get screen dimensions and draw the string at the center
+//     M5.Display.setTextSize(3);
+//     y=32; M5.Display.drawString("BLE KB", x, y);
+//     y=64; M5.Display.drawString("cnnting", x, y);    
+//     y=84; M5.Display.drawString("...", x, y);        
+
+//     NimBLEDevice::init("ESP32-Host");
+
+//     // 安全設定：Just Works 模式
+//     //NimBLEDevice::deleteAllBonds(); // 每次重啟清除舊配對，確保重新握手
+//     NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
+
+//     NimBLEScan* pScan = NimBLEDevice::getScan();
+//     pScan->setAdvertisedDeviceCallbacks(new MyCallbacks(), false);
+//     pScan->setActiveScan(true);
+//     pScan->start(0);
+
+
+
+// }
+
+
+//for test
+void setup() {
+    auto cfg = M5.config();
+    M5.begin(cfg);
+    Serial.begin(115200);
+
+    // 1. 啟動 WiFi 並完成 HTTP 請求
+    Serial.println(">>> Phase 1: WiFi & n8n");
+    WiFi.begin(ssid, password);
+    
+    // 設定超時防止死循環
+    unsigned long startAttemptTime = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < 10000) {
+        delay(500);
+        Serial.print(".");
+    }
+
+    if (WiFi.status() == WL_CONNECTED) {
+        call_n8n(); 
+        delay(500);
+        
+        // 【關鍵】做完 HTTP 請求後，暫時關閉 WiFi 釋放記憶體
+        WiFi.disconnect(true); 
+        WiFi.mode(WIFI_OFF);
+        Serial.println("WiFi turned OFF to save RAM for BLE.");
+    }
+
+    // 給系統一點時間回收記憶體 (Garbage Collection)
+    delay(1000); 
+    Serial.printf("Free Heap before BLE: %d bytes\n", ESP.getFreeHeap());
+
+    // 3. 啟動 BLE
+    Serial.println(">>> Phase 2: NimBLE Init");
+    
+    // 增加堆疊空間的初始化 (如果 PlatformIO 有設配置)
+    NimBLEDevice::init("ESP32-Host");
+
+    // 4. 設定安全參數 (先不要 deleteAllBonds)
+    NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
+    NimBLEDevice::setSecurityAuth(true, true, true);
+
+    // 5. 啟動掃描 (使用保守的掃描參數)
+    NimBLEScan* pScan = NimBLEDevice::getScan();
+    pScan->setAdvertisedDeviceCallbacks(new MyCallbacks(), false);
+    pScan->setInterval(100); // 掃描間隔長一點，給 WiFi 留呼吸空間
+    pScan->setWindow(50);    
+    pScan->setActiveScan(true);
+    
+    Serial.println(">>> Phase 3: Start Scanning...");
+    pScan->start(0, false); // 不設限時，持續掃描
+}
+
+void loop() {
+    if (doConnect) {
+        doConnect = false;
+        if (connectToServer()) {
+            drawRedHeart(); 
+            Serial.println(">>> SUCCESS: System Ready. Press keys now!");
+        } else {
+            Serial.println(">>> FAILED: Setup incomplete. Retrying...");
+            NimBLEDevice::getScan()->start(0);
+        }
+    }
+    // delay(10);
+    M5.update();
+
+    if (screenIsOn && (millis() - lastKeyEventTime > SLEEP_TIMEOUT)) {
+        M5.Display.sleep();
+        M5.Display.setBrightness(0);
+        screenIsOn = false;
+        Serial.println("Idle timeout: Sleeping display");
+    }
+
+    // Check if the main screen button was pressed
+    if (M5.BtnA.wasPressed()) {
+        lastKeyEventTime = millis();
+        if (!screenIsOn) {
+            // WAKE UP
+            M5.Display.wakeup();
+            M5.Display.setBrightness(100); 
+            screenIsOn = true;
+            Serial.println("Display: Awake");
+        } else {
+            // GO TO SLEEP
+            M5.Display.sleep();
+            // Note: Some versions also need brightness 0 to kill the LED driver
+            M5.Display.setBrightness(0); 
+            screenIsOn = false;
+            Serial.println("Display: Sleeping");
+        }
+    }    
+}

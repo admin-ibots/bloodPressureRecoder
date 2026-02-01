@@ -1,13 +1,13 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
+#include "../secretes/bpr_webhooks.h"
 
-const char* ssid = "TP-LINK_D413";
-const char* password = "12345678";
-// const char* ssid = "MAC";
-// const char* password = "Kpc24642464";
-// 建議改用正式網址（去掉 -test），並在 n8n 點擊 Active
-String url = "http://192.168.0.102:5678/webhook/620e6635-20ae-44e7-b21e-a77e9cedb343"; // Upload/Reset 後，剛開始會有失敗，但幾次後(10次內)，開始成功後就 OK
-//String url = "http://n8n4090.yo3dp.cc/webhook/620e6635-20ae-44e7-b21e-a77e9cedb343"; // Upload/Reset 後，剛開始會有失敗，但幾次後(10次內)，開始成功後就 OK
+// define WIFI: HOME or OFFICE
+#define  WIFI HOME
+#include "../secretes/wifi_credentials.h"
+
+// only works in office: String url = N8N_BPR_LOCALHOST_HTTP_WEBHOOK; 
+String url = N8N_BPR_CLOUD_FLARE_HTTP_WEBHOOK;
 
 unsigned long startMs;
 unsigned long duration;
@@ -70,6 +70,6 @@ void loop() {
     call_n8n();
     duration = millis() - startMs; // 計算耗時
     Serial.printf("n8n 耗時: %lu 毫秒\n", duration);
-    delay(2000); // 增加間隔，避免被伺服器判定為攻擊
+    delay(20000); // 增加間隔，避免被伺服器判定為攻擊
 }
 

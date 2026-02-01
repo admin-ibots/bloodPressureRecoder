@@ -1,3 +1,6 @@
+# Ignore the secrets folder
+secretes/
+
 # Prerequisites
 *.d
 
