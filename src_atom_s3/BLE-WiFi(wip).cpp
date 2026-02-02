@@ -44,6 +44,10 @@ String finalData = "";
 int inputStep = 0;  // 0: idle, 1: BU, 2: BD, 3: HR
 String tempDigits = ""; // Temporary buffer for the current number being typed
 
+// --- 重新啟動計時器 ---
+unsigned long lastCheckTime = 0;
+const unsigned long checkInterval = 300000;
+
 // --- UI 繪製函數 ---
 
 /** 繪製右上角鍵盤電量 */
@@ -205,6 +209,7 @@ bool validateFormat(String s) {
 /** BLE 接收到資料的回呼函數 */
 void notifyCallback(NimBLERemoteCharacteristic* pChar, uint8_t* pData, size_t length, bool isNotify) {
     lastKeyEventTime = millis();
+    lastCheckTime = millis();
 
     if (length >= 3) {
         uint8_t keyCode = pData[2];
@@ -492,6 +497,7 @@ void setup() {
     Serial.println(">>> Phase 3: Start Scanning...");
     pScan->start(0, false); // 不設限時，持續掃描
 
+    lastCheckTime = millis();
     M5.Display.wakeup();
 }
 
@@ -523,8 +529,7 @@ void checkConnections() {
     }
 }
 
-unsigned long lastCheckTime = 0;
-const unsigned long checkInterval = 300000; 
+ 
 void loop() {
     if (doConnect) {
         doConnect = false;
@@ -540,11 +545,17 @@ void loop() {
     // delay(10);
     M5.update();
 
-    if (millis() - lastCheckTime >= checkInterval) {
+    unsigned long milliPassed = millis() - lastCheckTime;
+    if (milliPassed >= checkInterval) {
         lastCheckTime = millis();
-        Serial.println("\n--- 5 minutes passed, restarting... ---");
+        Serial.println("\n--- Idle times up!, restarting... ---");
         ESP.restart();
         // checkConnections();
+    } else {
+        if ((milliPassed > 60000) && (milliPassed % 60000 == 0)) {
+            Serial.println("Idle time: " + String(milliPassed / 60000) + " minutes");
+            delay(100);
+        }
     }
 
     // if (screenIsOn && (millis() - lastKeyEventTime > SLEEP_TIMEOUT)) {
