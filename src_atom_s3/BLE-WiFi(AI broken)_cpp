@@ -1,0 +1,290 @@
+#include <Arduino.h>
+#include <WiFi.h>
+#include <NimBLEDevice.h>
+#include <M5Unified.h>
+#include <HTTPClient.h>
+
+// --- 外部參數配置 ---
+#include "../secretes/bpr_webhooks.h"
+#define WIFI HOME
+#include "../secretes/wifi_credentials.h"
+
+// --- 常數定義 ---
+const char* TARGET_BLE_NAME = "YaRan KeyPad";
+
+// BLE HID 標準 UUIDs
+static const NimBLEUUID hidServiceUUID((uint16_t)0x1812);
+static const NimBLEUUID reportUUID((uint16_t)0x2A4D);
+static const NimBLEUUID reportMapUUID((uint16_t)0x2A4B);
+static const NimBLEUUID batteryServiceUUID((uint16_t)0x180F);
+static const NimBLEUUID batteryLevelCharUUID((uint16_t)0x2A19);
+
+// --- 全域變數 ---
+NimBLEAdvertisedDevice* myDevice = nullptr;
+NimBLEClient* pClient = nullptr;
+bool doConnect = false;
+bool screenIsOn = true;
+
+unsigned long lastCheckTime = 0;
+const unsigned long CHECK_INTERVAL = 100000; 
+
+// 數據收集緩衝區
+String valUR = "", valBU = "", valBD = "", valHR = "";
+String tempDigits = "";
+int inputStep = 0;      // 0:等待輸入, 1:BU, 2:BD, 3:HR
+int remoteBatLevel = -1;
+unsigned long lastKeyEventTime = 0;
+
+// --- UI 繪製函數 ---
+
+/** 繪製右上角鍵盤電量 */
+void drawBattery() {
+    M5.Display.setTextSize(2);
+    M5.Display.setTextColor(BLACK);
+    M5.Display.setTextDatum(top_right);
+    
+    String batText = (remoteBatLevel == -1) ? "KB: ???" : "KB:" + String(remoteBatLevel) + "%";
+    M5.Display.drawString(batText, 125, 5);
+}
+
+/** 繪製側邊欄已輸入的數值 */
+void drawSidebar() {
+    M5.Display.setTextSize(3);
+    M5.Display.setTextColor(BLACK);
+    M5.Display.setTextDatum(top_left);
+
+    int startX = 10;
+    if (valUR != "") M5.Display.drawString("UR:" + valUR, 40, 24);
+    if (valBU != "") M5.Display.drawString("BU:" + valBU, startX, 52);
+    if (valBD != "") M5.Display.drawString("BD:" + valBD, startX, 80);
+    if (valHR != "") M5.Display.drawString("HR:" + valHR, startX, 108);
+}
+
+/** 繪製主畫面 (綠底紅心) */
+void drawMainUI() {
+    M5.Display.fillScreen(GREEN);
+    int x = M5.Display.width() / 2;
+    int y = M5.Display.height() / 2;
+    
+    M5.Display.fillCircle(x - 15, y - 10, 15, RED);
+    M5.Display.fillCircle(x + 15, y - 10, 15, RED);
+    M5.Display.fillTriangle(x - 27, y, x + 27, y, x, y + 30, RED);
+    M5.Display.fillRect(x - 10, y - 10, 20, 10, RED); 
+
+    drawBattery();
+    drawSidebar();
+}
+
+/** 顯示全螢幕狀態訊息 */
+void showStatus(int COLOR, String line1, String line2="", String line3="") {
+    M5.Display.fillScreen(COLOR);
+    M5.Display.setTextColor(BLACK); 
+    M5.Display.setTextDatum(middle_center);
+    
+    M5.Display.setTextSize(3);
+    M5.Display.drawString(line1, M5.Display.width()/2, 32);
+    M5.Display.drawString(line2, M5.Display.width()/2, 64);    
+    M5.Display.drawString(line3, M5.Display.width()/2, 84);   
+}
+
+// --- 網路與通訊邏輯 ---
+
+/** 呼叫 n8n Webhook */
+boolean call_n8n(String data) {
+    // [優化] HTTPS 請求前暫停掃描，避免射頻衝突 (SSL -1 預防)
+    bool wasScanning = NimBLEDevice::getScan()->isScanning();
+    if (wasScanning) NimBLEDevice::getScan()->stop();
+
+    WiFiClient client;
+    HTTPClient http;
+    String url = N8N_BPR_CLOUD_FLARE_HTTP_WEBHOOK;
+    String finalURL = url + data;
+
+    Serial.println(">>> 正在上傳至 n8n...");
+    http.begin(client, finalURL);
+    http.setTimeout(15000); 
+    http.addHeader("Connection", "close");
+
+    int httpCode = http.GET();
+    bool success = (httpCode > 0);
+
+    if (success) {
+        Serial.printf(">>> 上傳成功: %d\n", httpCode);
+    } else {
+        Serial.printf(">>> 上傳失敗: %s\n", http.errorToString(httpCode).c_str());
+    }
+
+    http.end();
+    // 恢復掃描
+    if (wasScanning) NimBLEDevice::getScan()->start(0, false);
+    return success;
+}
+
+/** 驗證資料格式是否正確 */
+bool validateFormat(String s) {
+    if (!s.startsWith("?UR=")) return false;
+    if (s.indexOf("BU=") == -1 || s.indexOf("BD=") == -1 || s.indexOf("HR=") == -1) return false;
+    
+    // 簡單數值區間檢查
+    return true; 
+}
+
+/** BLE 接收到資料的回呼函數 */
+void notifyCallback(NimBLERemoteCharacteristic* pChar, uint8_t* pData, size_t length, bool isNotify) {
+    lastKeyEventTime = millis();
+    if (length < 3) return;
+
+    uint8_t keyCode = pData[2];
+    if (keyCode == 0x00 || keyCode == 0x53) return; // 忽略空鍵或 NumLock
+
+    char c = 0;
+    // Numpad Key Map
+    if (keyCode >= 0x59 && keyCode <= 0x61) c = (char)('1' + (keyCode - 0x59));
+    else if (keyCode == 0x62) c = '0';
+    else if (keyCode == 0x54) c = '/';
+    else if (keyCode == 0x55) c = '*';
+    else if (keyCode == 0x56) c = '-';
+    else if (keyCode == 0x57) c = '+';
+    else if (keyCode == 0x63) c = '.';
+    else if (keyCode == 0x58) { // Enter 鍵: 送出
+        String finalData = "?UR=" + valUR + "&&BU=" + valBU + "&&BD=" + valBD + "&&HR=" + valHR;
+        if (validateFormat(finalData)) {
+            showStatus(GREEN, "SENDING", "...");
+            if (call_n8n(finalData)) showStatus(GREEN, "SENT");
+            else showStatus(RED, "FAILED");
+        } else {
+            showStatus(RED, "FORMAT", "ERROR");
+        }
+        delay(1500);
+        valUR = ""; valBU = ""; valBD = ""; valHR = ""; inputStep = 0; tempDigits = "";
+        drawMainUI();
+        return;
+    }
+
+    // 邏輯處理: 按下 - 或 + 定義用戶 A/B
+    if (c == '-') { valUR = "A"; inputStep = 1; tempDigits = ""; }
+    else if (c == '+') { valUR = "B"; inputStep = 1; tempDigits = ""; }
+    else if (c == '/') { // 側邊按鍵: 切換螢幕
+        screenIsOn ? M5.Display.sleep() : M5.Display.wakeup();
+        screenIsOn = !screenIsOn;
+        return;
+    }
+    else if ((c >= '0' && c <= '9') || c == '.') {
+        if (c != '.') tempDigits += c;
+        // 自動跳下一格 (滿三位或按下點)
+        if (tempDigits.length() == 3 || c == '.') {
+            if (inputStep == 1) { valBU = tempDigits; inputStep = 2; }
+            else if (inputStep == 2) { valBD = tempDigits; inputStep = 3; }
+            else if (inputStep == 3) { valHR = tempDigits; inputStep = 0; }
+            tempDigits = ""; 
+        }
+    }
+
+    // 更新顯示
+    M5.Display.fillScreen(GREEN);
+    drawBattery();
+    drawSidebar();
+    M5.Display.setTextDatum(middle_center);
+    M5.Display.drawString(tempDigits, 16, 16);
+}
+
+/** 連線至 BLE 鍵盤 */
+bool connectToServer() {
+    if (pClient != nullptr) NimBLEDevice::deleteClient(pClient);
+    pClient = NimBLEDevice::createClient();
+
+    Serial.println(">>> 正在連線實體層...");
+    if (!pClient->connect(myDevice)) return false;
+
+    Serial.println(">>> 請求加密連線...");
+    pClient->secureConnection();
+    delay(2000); // 等待加密完成
+
+    // 讀取電量
+    NimBLERemoteService* pBatService = pClient->getService(batteryServiceUUID);
+    if (pBatService) {
+        NimBLERemoteCharacteristic* pBatChar = pBatService->getCharacteristic(batteryLevelCharUUID);
+        if (pBatChar) remoteBatLevel = pBatChar->readValue<uint8_t>();
+    }
+
+    // 訂閱 HID Report
+    NimBLERemoteService* pHid = pClient->getService(hidServiceUUID);
+    if (pHid) {
+        auto charas = pHid->getCharacteristics(true); 
+        for (auto &chara : *charas) {
+            if (chara->getUUID() == reportUUID && chara->canNotify()) {
+                chara->subscribe(true, notifyCallback);
+            }
+        }
+    }
+
+    // 更新連線參數 (穩定共存 WiFi)
+    pClient->updateConnParams(12, 24, 0, 600); 
+    drawMainUI();
+    return true;
+}
+
+class MyCallbacks: public NimBLEAdvertisedDeviceCallbacks {
+    void onResult(NimBLEAdvertisedDevice* advertisedDevice) {
+        if (advertisedDevice->getName() == TARGET_BLE_NAME) {
+            Serial.println(">>> 找到目標鍵盤，停止掃描...");
+            NimBLEDevice::getScan()->stop();
+            if (myDevice != nullptr) delete myDevice;
+            myDevice = new NimBLEAdvertisedDevice(*advertisedDevice);
+            doConnect = true;
+        }
+    }
+};
+
+// --- 主程式循環 ---
+
+void setup() {
+    auto cfg = M5.config();
+    M5.begin(cfg);
+    Serial.begin(115200);
+
+    // 1. WiFi 初始化
+    showStatus(GREEN, "WiFi", "Connecting...");
+    WiFi.begin(ssid, password);
+    WiFi.setSleep(false); // [關鍵] 關閉省電模式以穩定 BLE 共存
+
+    int retry = 0;
+    while (WiFi.status() != WL_CONNECTED && retry++ < 20) delay(500);
+
+    // 2. NimBLE 初始化
+    NimBLEDevice::init("S3-Host");
+    NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
+    NimBLEDevice::setSecurityAuth(true, true, true);
+
+    NimBLEScan* pScan = NimBLEDevice::getScan();
+    pScan->setAdvertisedDeviceCallbacks(new MyCallbacks(), false);
+    pScan->setInterval(200); 
+    pScan->setWindow(50);    
+    pScan->start(0, false);
+
+    Serial.println(">>> 系統就緒，開始掃描鍵盤...");
+    drawMainUI();
+}
+
+void loop() {
+    M5.update();
+
+    // 處理連線請求
+    if (doConnect) {
+        doConnect = false;
+        if (!connectToServer()) NimBLEDevice::getScan()->start(0, false);
+    }
+
+    // 每 10 分鐘檢查一次狀態 (或重啟以保持潔淨)
+    if (millis() - lastCheckTime >= CHECK_INTERVAL) {
+        lastCheckTime = millis();
+        // 如果需要 30 分鐘重啟，改為 ESP.restart()
+        Serial.printf(">>> 系統狀態檢查 - Heap: %d\n", ESP.getFreeHeap());
+    }
+
+    // 實體按鍵切換顯示
+    if (M5.BtnA.wasPressed()) {
+        screenIsOn ? M5.Display.sleep() : M5.Display.wakeup();
+        screenIsOn = !screenIsOn;
+    }
+}
